@@ -1,1 +1,3 @@
 Codice da far correre per l'esame
+
+tar -xzvf data_rnaseq.tar.gz -C rawdata/
