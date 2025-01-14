@@ -1,3 +1,321 @@
 Codice da far correre per l'esame
 
-tar -xzvf data_rnaseq.tar.gz -C rawdata/
+mkdir -p raw_data #da creare all'interno di datiesame
+
+tar -xzvf #nome del file al fine di estrarre il file compresso# -C raw_data
+
+#verifica della funzionalità di Salmon scrivendo "salmon"
+#altrimenti utilizzare il comando: export PATH=${PATH}:/usr/local/bin
+
+# Ciclo attraverso tutti i file che terminano con "_1.fasta.gz"
+for sample in *_1.fasta.gz
+do
+    # Definizione dell'indice di riferimento
+    index="/home/gitpod/datiesame/datasets_reference_only/trascriptome/chr21_transcripts_index"
+    
+    # Rimozione della parte finale "_1.fasta.gz" per ottenere il nome base
+    name=${sample%_1.fasta.gz}
+    
+    # Messaggio di inizio elaborazione
+    echo "Quantifying $name"
+    
+    # Salmon per quantificare l'espressione
+    salmon quant \
+        -p 2 \
+        -i "$index" \
+        -l IU \
+        -1 "${name}_1.fasta.gz" \
+        -2 "${name}_2.fasta.gz" \
+        --validateMappings \
+        -o "${name}.quant"
+    
+    # Messaggio di fine elaborazione
+    echo -e "$name done now\n"
+done
+
+
+
+#########################################
+# Esamina di un file di quantificazione #
+#########################################
+
+
+cd sample_01.quant
+head quant.sf
+
+
+####################################
+# Differential Expression Analysis #
+####################################
+
+
+# Ci spostiamo ora sulla CONSOLE
+# Settaggio working directory
+setwd("/home/gitpod/datiesame")
+
+# Caricamento delle librerie
+library(DESeq2)
+library(tximport)
+library(tidyverse)
+library(pheatmap)
+library(clusterProfiler)
+library(DOSE)
+library(org.Hs.eg.db)
+
+
+
+############################
+# Preparazione del dataset #
+############################
+
+
+# Creazione dei metadati
+dataset <- tibble(
+  sample = c("sample_01",
+             "sample_02",
+             "sample_03",
+             "sample_04",
+             "sample_05",
+             "sample_06"),
+  condition = c(rep("control", 3),
+                rep("case", 3))
+)
+tx2gene <- read_tsv("/home/gitpod/datiesame/datasets_reference_only/trascriptome/gencode.v29.transcripts_no-vers_chr21_tx2gene.txt")
+
+###################################
+#### READ LOCAL FILES IN ##########
+###################################
+
+files <- file.path("/home/gitpod/datiesame/raw_data", paste0(dataset$sample,".quant"), "quant.sf")
+names(files) <- dataset$sample
+
+# Importazione dati di quantificazione genica ottenuti con Salmon
+# tximport() --> funzione che permette di aggregare i dati da livello di trascritto a livello di gene
+# files --> vettore con i path dei file di quantificazione e nomi dei campioni assegnati precedentemente
+# type = "salmon" --> specifica che la quantificazione proviene da Salmon
+# tx2gene --> file di associazione tra ID trascritti e ID geni
+# txi --> lista contenente varie componenti (counts, abundance and length)
+txi <- tximport(files, type = "salmon", tx2gene = tx2gene)
+
+
+# Un punto importante per evitare errori nei passaggi successivi è allineare i nome delle righe dei metadati con i nomi delle colonne di txi$counts
+colnames(txi$counts) # Verifica nomi delle colonne di txi$counts
+rownames(dataset)    # Verifica nomi delle righe dei metadati
+
+
+# Allineare nomi delle righe dei metadati con nomi delle colonne di txi$counts
+# Collegamento tra i metadati (dataset) e i dati di espressione genica (txi)
+rownames(dataset) <- colnames(txi$counts)
+colnames(txi$counts)
+rownames(dataset)
+
+
+# La funzione DESeqDataSetFromTximport viene utilizzata per creare un oggetto DESeqDataSet (dds), a partire dai dati di espressione genica e dai metadati associati
+# Input principali:
+# - txi: oggetto prodotto da tximport
+# - dataset: dataframe di metadati che descrive le condizioni sperimentali dei campioni
+# - ~ condition: formula che specifica la variabile sperimentale (nel nostro caso "condition"). Questo permette a DESeq2 di sapere quali gruppi comparare
+dds <- DESeqDataSetFromTximport(txi, dataset, ~ condition)
+
+###################################
+## PREFILTER MIN COUNTS >10 #####
+###################################
+
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+### make sure base level is control
+dds$condition <- relevel(dds$condition, ref = "control")
+
+###################################
+##### DIFFERENTIAL EXPRESSION #####
+###################################
+
+# Utilizzo del pacchetto DESeq2 per eseguire un'analisi di espressione differenziale
+dds <- DESeq(dds)
+
+
+###################################
+## EXTRACT ANALYSIS RESULTS #####
+###################################
+
+res <- results(dds)
+resOrdered <- res[order(res$pvalue),]
+
+
+# Plot esplorativi dei risultati
+
+
+# Crea un plot di tipo MA per visualizzare il log2foldchange rispetto alla media normalizzata
+
+plotMA(res, ylim = c(-3, 3))
+dev.off()
+
+# Visualizzazione le stime di dispersione per i dati del modello DESeq2
+
+plotDispEsts(dds)
+dev.off()
+
+# Crea un grafico dei conteggi normalizzati per il gene con il valore di padj più basso
+# gene = which.min(res$padj) individua e restituisce l'indice del gene con il valore di padj più basso (più significativo)
+# `intgroup` specifica la variabile del design che deve essere utilizzata nel grafico
+
+
+plotCounts(dds, gene = which.min(res$padj), intgroup = "condition")
+dev.off()
+
+
+#############################
+# Salvataggio dei risultati #
+#############################
+
+
+# Converte i risultati ordinati in un tibble
+resdata <- as_tibble(resOrdered)
+
+# Aggiunge una colonna `gene` contenente i nomi dei geni, presi dai nomi delle righe dell'oggetto `resOrdered`
+resdata$gene <- rownames(resOrdered)
+
+# Mettere gene come prima colonna
+resdata <- resdata %>%
+  relocate(gene, .before = everything())
+
+# Salvataggio risultati come file TSV (tab-separated values)
+write_tsv(resdata, "analysis_results.tsv")
+
+# Estrazione dei geni significativi (padj < 0.05)
+significant_genes <- as_tibble(resdata %>%
+                                 filter(padj < 0.05))
+
+# Salvataggio risultati significativi
+write_tsv(significant_genes, "significant_genes.tsv")
+
+############################################
+## CLUSTERING ##############################
+############################################
+
+ntd <- normTransform(dds)
+select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                decreasing=TRUE)[1:20]
+df <- as.data.frame(colData(dds)[,c("condition")])
+
+pheatmap(assay(ntd)[select,],
+         cluster_cols=FALSE, annotation_col=df$condition)
+
+plotPCA(ntd, intgroup=c("condition"))
+
+###################################
+## EXTRACT SIGNIFICANT GENES #####
+###################################
+
+universe <- AnnotationDbi::select(org.Hs.eg.db,
+                                  keys = keys(org.Hs.eg.db),
+                                  columns = c('ENTREZID','SYMBOL','ENSEMBL','ENSEMBLTRANS'),
+                                  keytype = 'ENTREZID')
+
+sig_genes <- resdata$gene[which(resdata$padj<0.05)]
+entrez_genes_sig <- unique(universe[which(universe$ENSEMBL %in% sig_genes),]$ENTREZID)
+
+pvalue_ens_genes <- resdata$padj[which(resdata$padj<0.05)]
+names(pvalue_ens_genes)<-sig_genes
+
+pvalue_entrez_genes <- resdata$padj[which(resdata$padj<0.05)]
+names(pvalue_entrez_genes) <- entrez_genes_sig
+
+
+
+################################################
+# Analisi di enrichment con Gene Ontology (GO) #
+################################################
+
+
+# Analisi di arricchimento che consente di identificare i termini GO (Gene Ontology) rappresentati tra i geni significativi
+# in particolare ci concentriamo sui termini GO relativi ai processi biologici (BP), alle funzioni molecolari (MF) e ai componenti cellulari (CC)
+# modificando ont = "BP", "MF" o "CC" è possibile concentrarsi sulle diverse categorie di Gene Ontology
+ego_BP <- enrichGO(gene = sig_genes,
+                   universe = unique(tx2gene$GENEID),
+                   OrgDb = org.Hs.eg.db,
+                   keyType = 'ENSEMBL',
+                   ont = "BP",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff = 0.05)
+ego_BP
+
+ego_MF <- enrichGO(gene = sig_genes,
+                   universe = unique(tx2gene$GENEID),
+                   OrgDb = org.Hs.eg.db,
+                   keyType = 'ENSEMBL',
+                   ont = "MF",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff = 0.05)
+ego_MF
+
+ego_CC <- enrichGO(gene = sig_genes,
+                   universe = unique(tx2gene$GENEID),
+                   OrgDb = org.Hs.eg.db,
+                   keyType = 'ENSEMBL',
+                   ont = "CC",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff = 0.05)
+ego_CC
+
+# Creazione di un dotplot che consente la visualizzazione dei termini GO più significativi (in questo caso relativi alle funzioni molecolari) in base al valore di padj
+# L'opzione showCategory = 10 mostra il numero di categorie significative da mostrare, in questo caso 10
+
+dotplot(ego_BP, showCategory = 10)
+dev.off()
+
+# Creazione di un gene-concept network per visualizzare la connessione tra i geni e i termini GO arricchiti (in questo caso relativi alle funzioni molecolari)
+# L'opzione showCategory in questo caso è lasciata come default, verrano quindi mostrare le 5 categorie più significative
+
+cnetplot(ego_BP, foldChange = resdata$log2FoldChange[which(resdata$padj<0.5)])
+dev.off()
+
+# Creazione di un dotplot che consente la visualizzazione dei termini GO più significativi (in questo caso relativi alle funzioni molecolari) in base al valore di padj
+# L'opzione showCategory = 10 mostra il numero di categorie significative da mostrare, in questo caso 10
+
+dotplot(ego_MF, showCategory = 10)
+dev.off()
+
+# Creazione di un gene-concept network per visualizzare la connessione tra i geni e i termini GO arricchiti (in questo caso relativi alle funzioni molecolari)
+# L'opzione showCategory in questo caso è lasciata come default, verrano quindi mostrare le 5 categorie più significative
+
+cnetplot(ego_MF, foldChange = resdata$log2FoldChange[which(resdata$padj<0.5)])
+dev.off()
+
+# Creazione di un dotplot che consente la visualizzazione dei termini GO più significativi (in questo caso relativi alle funzioni molecolari) in base al valore di padj
+# L'opzione showCategory = 10 mostra il numero di categorie significative da mostrare, in questo caso 10
+
+dotplot(ego_CC, showCategory = 10)
+dev.off()
+
+# Creazione di un gene-concept network per visualizzare la connessione tra i geni e i termini GO arricchiti (in questo caso relativi alle funzioni molecolari)
+# L'opzione showCategory in questo caso è lasciata come default, verrano quindi mostrare le 5 categorie più significative
+
+cnetplot(ego_CC, foldChange = resdata$log2FoldChange[which(resdata$padj<0.5)])
+dev.off()
+
+
+#####################
+# DisGeNET analysis #
+####################
+
+
+# DisGeNET è un database di associazioni tra malattie e geni
+# Utile per vedere se i nostri geni significativi sono già stati descritti in alcune patologie
+
+# Lettura del file di associazione tra malattie e geni
+gda <- read_tsv(gzfile("/home/gitpod/datiesame/datasets_reference_only/trascriptome/all_gene_disease_associations.tsv.gz"))
+
+# Creazione dei dataframe per l'arricchimento
+# disease2gene --> associazione tra malattie e geni
+# disease2name --> associazione tra malattie e nomi delle malattie
+disease2gene = gda[, c("diseaseId", "geneId")]
+disease2name = gda[, c("diseaseId", "diseaseName")]
+
+disgnet = enricher(entrez_genes_sig, TERM2GENE=disease2gene, TERM2NAME=disease2name)
+
+## writeLines(summary(disgnet), "summary_disgnet.txt")
+
+cnetplot(disgnet, foldChange=resdata$log2FoldChange[which(resdata$padj<0.5)])
+
