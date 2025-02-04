@@ -20,7 +20,7 @@ ln -s /workspaces/class-rnaseq/datasets-class-rnaseq/raw_data/* .
 
 for sample in `ls *_1.fasta.gz`
 do
-index="/workspaces/class-rnaseq/datasets_reference_only/trascriptome/chr21_transcripts_index"
+index="/workspace/class-rnaseq/datasets_reference_only/trascriptome/chr21_transcripts_index"
 name=${sample%_1.fasta.gz}
 echo "quantifying $name"
 salmon quant \
