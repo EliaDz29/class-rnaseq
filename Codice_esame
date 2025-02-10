@@ -1,8 +1,9 @@
 Codice da far correre per l'esame
+cd /home/gitpod/datiesame
 
 mkdir -p raw_data #da creare all'interno di datiesame
 
-tar -xzvf #nome del file al fine di estrarre il file compresso# -C datiesame/raw_data
+tar -xzvf #nome del file al fine di estrarre il file compresso# -C home/gitpod/datiesame/raw_data
 
 #verifica della funzionalità di Salmon scrivendo "salmon"
 #altrimenti utilizzare il comando: export PATH=${PATH}:/usr/local/bin
